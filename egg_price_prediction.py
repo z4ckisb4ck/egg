@@ -16,7 +16,7 @@ from sklearn.metrics import mean_squared_error, mean_absolute_error
 
 BLS_API_URL    = "https://api.bls.gov/publicAPI/v2/timeseries/data/"
 EGGS_SERIES_ID = "APU000071761"  # “eggs, retail, per dozen”
-API_KEY        = os.getenv("BLS_API_KEY", None)
+API_KEY = os.getenv("BLS_API_KEY", "YOUR_API_KEY_HERE")
 
 STATIC_DATA = np.array([
     [2017,  1, 1.47], [2017,  2, 1.48], [2017,  3, 1.49], [2017,  4, 1.50],
@@ -74,21 +74,15 @@ def fetch_bls_eggs(start_year: int, end_year: int):
 
 @st.cache_data
 def prepare_data():
-    # 1) always load the FULL static set
     df_static = pd.DataFrame(STATIC_DATA, columns=["Year","Month","retail_price"])
-    df_static["date"] = pd.to_datetime(
-        df_static[["Year","Month"]].assign(Day=1)
-    )
+    df_static["date"] = pd.to_datetime(df_static[["Year","Month"]].assign(Day=1))
 
-    # 2) try to fetch live for the last 5 years
     now = datetime.now()
     dyn = fetch_bls_eggs(now.year - 5, now.year)
 
     if dyn is not None and len(dyn) > 0:
-        df_dyn = pd.DataFrame(dyn, columns=["Year","Month","retail_price"])
-        df_dyn["date"] = pd.to_datetime(
-            df_dyn[["Year","Month"]].assign(Day=1)
-        )
+        df_dyn = pd.DataFrame(dyn, columns=["Year","Month","retail_price"]) 
+        df_dyn["date"] = pd.to_datetime(df_dyn[["Year","Month"]].assign(Day=1))
         df = pd.concat([df_static, df_dyn], ignore_index=True)
         df = df.drop_duplicates(subset="date", keep="last")
     else:
@@ -97,15 +91,14 @@ def prepare_data():
     df = df.sort_values("date").reset_index(drop=True)
     return df, ["Year","Month"]
 
-# ------------------------------------------------------------------------------
-# 2) Walk-forward + bootstrap CI
-# ------------------------------------------------------------------------------
 
 def walk_forward_predict(df, features, n_bootstrap, xgb_params):
     history = df.iloc[:3].copy()
     results = []
+    total = len(df) - 3
+    progress = st.progress(0)
 
-    for idx in range(3, len(df)):
+    for i, idx in enumerate(range(3, len(df))):
         train = history.copy()
         test  = df.iloc[idx]
         X_test = test[features].values.reshape(1, -1)
@@ -119,7 +112,7 @@ def walk_forward_predict(df, features, n_bootstrap, xgb_params):
 
         boot = np.array(boot)
         mu   = boot.mean()
-        lo, hi = np.percentile(boot, [2.5,97.5])
+        lo, hi = np.percentile(boot, [2.5, 97.5])
 
         results.append({
             "date":      test["date"],
@@ -130,47 +123,55 @@ def walk_forward_predict(df, features, n_bootstrap, xgb_params):
         })
         history = pd.concat([history, df.iloc[[idx]]], ignore_index=True)
 
+        progress.progress((i + 1) / total)
+    progress.empty()
+
     return pd.DataFrame(results)
 
-# ------------------------------------------------------------------------------
-# 3) Plotting helpers
-# ------------------------------------------------------------------------------
 
-def plot_matplotlib(df, preds):
-    plt.ion()
-    fig, ax = plt.subplots(figsize=(10,5))
+def plot_static_matplotlib(df, preds):
+    fig, ax = plt.subplots(figsize=(10, 5))
+    ax.plot(df["date"], df["retail_price"], color="gray", label="Historical")
+    ax.fill_between(preds["date"], preds["ci_lower"], preds["ci_upper"],
+                    color="lightgray", label="95% CI")
+    ax.plot(preds["date"], preds["predicted"], "C1--", label="Predicted")
+    ax.plot(preds["date"], preds["actual"],    "C0-",  linewidth=2, label="Actual")
+    ax.set_title("Egg Price Forecast (walk-forward)")
+    ax.set_ylabel("$/dozen")
+    ax.legend(loc="upper left")
+    fig.autofmt_xdate()
+    return fig
 
-    for i in range(len(preds)):
-        ax.clear()
-        ax.plot(df["date"], df["retail_price"], color="gray", label="Historical")
-        sub = preds.iloc[:i+1]
-        ax.fill_between(sub["date"], sub["ci_lower"], sub["ci_upper"], color="lightgray", label="95% CI")
-        ax.plot(sub["date"], sub["predicted"], "C1--", label="Predicted")
-        ax.plot(sub["date"], sub["actual"], "C0-", linewidth=2, label="Actual")
-        ax.set_title("Egg Price Forecast (walk-forward)")
-        ax.set_ylabel("$/dozen")
-        ax.legend(loc="upper left")
-        fig.autofmt_xdate()
-        fig.canvas.draw()
-        plt.pause(0.05)
-
-    plt.ioff()
-    plt.show()
 
 def plot_plotly(df, preds):
     fig = go.Figure()
-    fig.add_trace(go.Scatter(x=df["date"], y=df["retail_price"], mode="lines", name="Historical", line=dict(color="gray")))
-    fig.add_trace(go.Scatter(x=preds["date"], y=preds["ci_upper"], line=dict(color="lightgray"), name="Upper CI"))
-    fig.add_trace(go.Scatter(x=preds["date"], y=preds["ci_lower"], line=dict(color="lightgray"), fill="tonexty", name="Lower CI"))
-    fig.add_trace(go.Scatter(x=preds["date"], y=preds["predicted"], mode="lines+markers", name="Predicted"))
-    fig.add_trace(go.Scatter(x=preds["date"], y=preds["actual"], mode="lines+markers", name="Actual"))
-    fig.update_layout(title="Egg Price Forecast (walk-forward)", xaxis_title="Date", yaxis_title="$/dozen",
-                      legend=dict(yanchor="top", y=0.99, xanchor="left", x=0.01))
+    fig.add_trace(go.Scatter(
+        x=df["date"], y=df["retail_price"],
+        mode="lines", name="Historical", line=dict(color="gray")
+    ))
+    fig.add_trace(go.Scatter(
+        x=preds["date"], y=preds["ci_upper"],
+        line=dict(color="lightgray"), name="Upper CI"
+    ))
+    fig.add_trace(go.Scatter(
+        x=preds["date"], y=preds["ci_lower"],
+        line=dict(color="lightgray"), fill="tonexty", name="Lower CI"
+    ))
+    fig.add_trace(go.Scatter(
+        x=preds["date"], y=preds["predicted"],
+        mode="lines+markers", name="Predicted"
+    ))
+    fig.add_trace(go.Scatter(
+        x=preds["date"], y=preds["actual"],
+        mode="lines+markers", name="Actual"
+    ))
+    fig.update_layout(
+        title="Egg Price Forecast (walk-forward)",
+        xaxis_title="Date", yaxis_title="$/dozen",
+        legend=dict(yanchor="top", y=0.99, xanchor="left", x=0.01)
+    )
     return fig
 
-# ------------------------------------------------------------------------------
-# 4) Streamlit UI
-# ------------------------------------------------------------------------------
 
 def main():
     st.title("🥚 Egg Price Walk-Forward Forecast")
@@ -180,9 +181,9 @@ def main():
     st.metric("Latest reported price (per dozen)", f"${last['retail_price']:.2f}")
 
     st.sidebar.header("Model hyperparameters")
-    n_bootstrap = st.sidebar.slider("Bootstrap samples", 10, 200, 50, step=10)
+    n_bootstrap = st.sidebar.slider("Bootstrap samples", 5, 200, 50, step=5)
     xgb_params = {
-        "n_estimators":  st.sidebar.slider("n_estimators", 50, 500, 300, step=50),
+        "n_estimators":  st.sidebar.slider("n_estimators",    50, 500, 300, step=50),
         "learning_rate": st.sidebar.slider("learning_rate", 0.01, 0.30, 0.10, step=0.01),
         "max_depth":     st.sidebar.slider("max_depth",       2, 10,   5),
         "verbosity":     0,
@@ -206,9 +207,11 @@ def main():
         c2.metric("MAE",  f"{mae:.3f}")
         c3.metric("MAPE", f"{mape:.1f}%")
 
-        plot_matplotlib(df, preds)
+        fig = plot_static_matplotlib(df, preds)
+        st.pyplot(fig)
         st.plotly_chart(plot_plotly(df, preds), use_container_width=True)
 
 if __name__ == "__main__":
     main()
+
 
