@@ -163,7 +163,7 @@ def plot_plotly(df, preds):
     fig.add_trace(go.Scatter(x=preds["date"], y=preds["ci_upper"], line=dict(color="lightgray"), name="Upper CI"))
     fig.add_trace(go.Scatter(x=preds["date"], y=preds["ci_lower"], line=dict(color="lightgray"), fill="tonexty", name="Lower CI"))
     fig.add_trace(go.Scatter(x=preds["date"], y=preds["predicted"], mode="lines+markers", name="Predicted"))
-    fig.add_trace(go.Scatter(x=preds["date"], y=preds["actual"], mode("lines+markers"), name="Actual"))
+    fig.add_trace(go.Scatter(x=preds["date"], y=preds["actual"], mode="lines+markers", name="Actual"))
     fig.update_layout(title="Egg Price Forecast (walk-forward)", xaxis_title="Date", yaxis_title="$/dozen",
                       legend=dict(yanchor="top", y=0.99, xanchor="left", x=0.01))
     return fig
@@ -211,3 +211,4 @@ def main():
 
 if __name__ == "__main__":
     main()
+
